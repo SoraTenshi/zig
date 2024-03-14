@@ -1632,7 +1632,7 @@ fn airArg(self: *Self, inst: Air.Inst.Index) !void {
 
         const dst_mcv = switch (src_mcv) {
             .register => |src_reg| dst: {
-                self.register_manager.getRegAssumeFree(src_reg, inst);
+                try self.register_manager.getReg(src_reg, inst);
                 break :dst src_mcv;
             },
             else => return self.fail("TODO: airArg {s}", .{@tagName(src_mcv)}),
@@ -1910,6 +1910,8 @@ fn airCondBr(self: *Self, inst: Air.Inst.Index) !void {
         self.processDeath(operand);
     }
     try self.genBody(then_body);
+    // point at the to-be-generated else case
+    try self.performReloc(reloc, @intCast(self.mir_instructions.len));
 
     // Revert to the previous register and stack allocation state.
 
@@ -1925,7 +1927,6 @@ fn airCondBr(self: *Self, inst: Air.Inst.Index) !void {
     self.next_stack_offset = parent_next_stack_offset;
     self.register_manager.free_registers = parent_free_registers;
 
-    try self.performReloc(reloc);
     const else_branch = self.branch_stack.addOneAssumeCapacity();
     else_branch.* = .{};
 
@@ -2021,7 +2022,7 @@ fn condBr(self: *Self, cond_ty: Type, condition: MCValue) !Mir.Inst.Index {
     };
 
     return try self.addInst(.{
-        .tag = .beq,
+        .tag = .bne,
         .data = .{
             .b_type = .{
                 .rs1 = reg,
@@ -2212,7 +2213,13 @@ fn airBlock(self: *Self, inst: Air.Inst.Index) !void {
     try self.genBody(body);
 
     for (self.blocks.getPtr(inst).?.relocs.items) |reloc| {
-        try self.performReloc(reloc);
+        // here we are relocing to point at the instruction after the block.
+        // [then case]
+        // [jump to end] // this is reloced
+        // [else case]
+        // [jump to end] // this is reloced
+        // [this isn't generated yet] // point to here
+        try self.performReloc(reloc, @intCast(self.mir_instructions.len));
     }
 
     const result = self.blocks.getPtr(inst).?.mcv;
@@ -2227,14 +2234,14 @@ fn airSwitch(self: *Self, inst: Air.Inst.Index) !void {
     // return self.finishAir(inst, .dead, .{ condition, .none, .none });
 }
 
-fn performReloc(self: *Self, inst: Mir.Inst.Index) !void {
+fn performReloc(self: *Self, inst: Mir.Inst.Index, target: Mir.Inst.Index) !void {
     const tag = self.mir_instructions.items(.tag)[inst];
 
-    const next_inst: u32 = @intCast(self.mir_instructions.len);
-
     switch (tag) {
-        .beq => self.mir_instructions.items(.data)[inst].b_type.inst = next_inst,
-        .jal => self.mir_instructions.items(.data)[inst].j_type.inst = next_inst,
+        .bne,
+        .beq,
+        => self.mir_instructions.items(.data)[inst].b_type.inst = target,
+        .jal => self.mir_instructions.items(.data)[inst].j_type.inst = target,
         else => return self.fail("TODO: performReloc {s}", .{@tagName(tag)}),
     }
 }
