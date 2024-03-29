@@ -2314,12 +2314,11 @@ fn genCall(
             switch (switch (func_key) {
                 else => func_key,
                 .ptr => |ptr| switch (ptr.addr) {
-                    .decl => |decl| mod.intern_pool.indexToKey(try mod.declPtr(decl).internValue(mod)),
+                    .decl => |decl| mod.intern_pool.indexToKey(mod.declPtr(decl).val.toIntern()),
                     else => func_key,
                 },
             }) {
                 .func => |func| {
-                    try mod.markDeclAlive(mod.declPtr(func.owner_decl));
                     if (self.bin_file.cast(link.File.Elf)) |elf_file| {
                         const sym_index = try elf_file.zigObjectPtr().?.getOrCreateMetadataForDecl(elf_file, func.owner_decl);
                         const sym = elf_file.symbol(sym_index);
