@@ -51,6 +51,7 @@ pub fn emitMir(
             .sub => try emit.mirRType(inst),
             .mul => try emit.mirRType(inst),
             .@"or" => try emit.mirRType(inst),
+            .xor => try emit.mirRType(inst),
 
             .cmp_eq => try emit.mirRType(inst),
             .cmp_neq => try emit.mirRType(inst),
@@ -220,6 +221,7 @@ fn mirRType(emit: *Emit, inst: Mir.Inst.Index) !void {
         .sllw => try emit.writeInstruction(Instruction.sllw(rd, rs1, rs2)),
         .srlw => try emit.writeInstruction(Instruction.srlw(rd, rs1, rs2)),
         .@"or" => try emit.writeInstruction(Instruction.@"or"(rd, rs1, rs2)),
+        .xor => try emit.writeInstruction(Instruction.xor(rd, rs1, rs2)),
         .cmp_imm_gte => {
             // rd = 1 if rs1 >= imm12
             // see the docstring of cmp_imm_gte to see why we use r_type here

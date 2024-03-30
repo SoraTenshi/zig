@@ -29,6 +29,9 @@ pub const Inst = struct {
         /// OR instruction. Uses r_type payload.
         @"or",
 
+        /// XOR instruction, Uses r_type payload.
+        xor,
+
         /// Addition
         add,
         /// Subtraction
