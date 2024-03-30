@@ -1049,14 +1049,104 @@ fn airIntCast(self: *Self, inst: Air.Inst.Index) !void {
 }
 
 fn airTrunc(self: *Self, inst: Air.Inst.Index) !void {
+    const mod = self.bin_file.comp.module.?;
     const ty_op = self.air.instructions.items(.data)[@intFromEnum(inst)].ty_op;
+
     if (self.liveness.isUnused(inst))
         return self.finishAir(inst, .dead, .{ ty_op.operand, .none, .none });
 
+    // const operand = try self.resolveInst(ty_op.operand);
+    const src_ty = self.typeOf(ty_op.operand);
+    const dst_ty = self.typeOfIndex(inst);
+
     const operand = try self.resolveInst(ty_op.operand);
-    _ = operand;
-    return self.fail("TODO implement trunc for {}", .{self.target.cpu.arch});
-    // return self.finishAir(inst, result, .{ ty_op.operand, .none, .none });
+
+    const result: MCValue = result: {
+        const src_int_info = src_ty.intInfo(mod);
+        const dst_int_info = dst_ty.intInfo(mod);
+
+        if (dst_int_info.bits > 64 or src_int_info.bits > 64) {
+            return self.fail("TODO: airTrunc does not yet support type with bit-width > 64", .{});
+        }
+
+        if (src_int_info.bits <= dst_int_info.bits) {
+            return self.fail("Couldn't @truncate, did you mean @intCast?", .{});
+        }
+
+        const is_signed = dst_int_info.signedness == .signed;
+
+        // promote the src into a register
+        const src_mcv = try self.copyToNewRegister(inst, operand);
+
+        var tmp_mcv: Register = undefined;
+
+        if (is_signed) {
+            tmp_mcv = try self.register_manager.allocReg(inst, gp);
+            // extract signed bit
+            _ = try self.addInst(.{
+                .tag = .srli,
+                .data = .{
+                    .i_type = .{
+                        .rs1 = src_mcv.register,
+                        .rd = tmp_mcv,
+                        .imm12 = @intCast(src_int_info.bits - 1),
+                    },
+                },
+            });
+
+            // set to correct position
+            _ = try self.addInst(.{
+                .tag = .slli,
+                .data = .{
+                    .i_type = .{
+                        .rs1 = tmp_mcv,
+                        .rd = tmp_mcv,
+                        .imm12 = @intCast(dst_int_info.bits - 1),
+                    },
+                },
+            });
+        }
+
+        _ = try self.addInst(.{
+            .tag = .slli,
+            .data = .{
+                .i_type = .{
+                    .rs1 = src_mcv.register,
+                    .rd = src_mcv.register,
+                    .imm12 = @intCast(src_int_info.bits - dst_int_info.bits - 1),
+                },
+            },
+        });
+
+        _ = try self.addInst(.{
+            .tag = .srli,
+            .data = .{
+                .i_type = .{
+                    .rs1 = src_mcv.register,
+                    .rd = src_mcv.register,
+                    .imm12 = @intCast(src_int_info.bits - dst_int_info.bits - 1),
+                },
+            },
+        });
+
+        if (is_signed) {
+            _ = try self.addInst(.{
+                .tag = .@"or",
+                .data = .{
+                    .r_type = .{
+                        .rs1 = src_mcv.register,
+                        .rs2 = tmp_mcv,
+                        .rd = src_mcv.register,
+                    },
+                },
+            });
+        }
+
+        break :result src_mcv;
+    };
+
+    // return self.fail("TODO implement trunc for {}", .{self.target.cpu.arch});
+    return self.finishAir(inst, result, .{ ty_op.operand, .none, .none });
 }
 
 fn airIntFromBool(self: *Self, inst: Air.Inst.Index) !void {
@@ -2319,8 +2409,8 @@ fn airAbs(self: *Self, inst: Air.Inst.Index) !void {
             } else {
                 const int_bits = ty.intInfo(mod).bits;
 
-                if (int_bits > 32) {
-                    return self.fail("TODO: airAbs for larger than 32 bits", .{});
+                if (int_bits > 64) {
+                    return self.fail("TODO: airAbs for larger than 64 bits", .{});
                 }
 
                 // promote the src into a register
