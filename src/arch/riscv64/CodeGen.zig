@@ -1055,7 +1055,6 @@ fn airTrunc(self: *Self, inst: Air.Inst.Index) !void {
     if (self.liveness.isUnused(inst))
         return self.finishAir(inst, .dead, .{ ty_op.operand, .none, .none });
 
-    // const operand = try self.resolveInst(ty_op.operand);
     const src_ty = self.typeOf(ty_op.operand);
     const dst_ty = self.typeOfIndex(inst);
 
@@ -1075,20 +1074,30 @@ fn airTrunc(self: *Self, inst: Air.Inst.Index) !void {
 
         const is_signed = dst_int_info.signedness == .signed;
 
-        // promote the src into a register
-        const src_mcv = try self.copyToNewRegister(inst, operand);
+        // promote the src into a temp register
+        const src_reg = try self.copyToTmpRegister(dst_ty, operand);
+        const lock = self.register_manager.lockRegAssumeUnused(src_reg);
+        defer self.register_manager.unlockReg(lock);
 
-        var tmp_mcv: Register = undefined;
+        // dst register (tracked)
+        const dst_mcv = try self.allocRegOrMem(inst, true);
+
+        // helper register to store the potential signed bit
+        var tmp_reg: ?Register = null;
+        var tmp_lock: ?RegisterLock = null;
+        defer {
+            if (tmp_lock) |tl| self.register_manager.unlockReg(tl);
+        }
 
         if (is_signed) {
-            tmp_mcv = try self.register_manager.allocReg(inst, gp);
+            tmp_reg, tmp_lock = try self.allocReg();
             // extract signed bit
             _ = try self.addInst(.{
                 .tag = .srli,
                 .data = .{
                     .i_type = .{
-                        .rs1 = src_mcv.register,
-                        .rd = tmp_mcv,
+                        .rs1 = src_reg,
+                        .rd = tmp_reg.?,
                         .imm12 = @intCast(src_int_info.bits - 1),
                     },
                 },
@@ -1099,8 +1108,8 @@ fn airTrunc(self: *Self, inst: Air.Inst.Index) !void {
                 .tag = .slli,
                 .data = .{
                     .i_type = .{
-                        .rs1 = tmp_mcv,
-                        .rd = tmp_mcv,
+                        .rs1 = tmp_reg.?,
+                        .rd = tmp_reg.?,
                         .imm12 = @intCast(dst_int_info.bits - 1),
                     },
                 },
@@ -1111,8 +1120,8 @@ fn airTrunc(self: *Self, inst: Air.Inst.Index) !void {
             .tag = .slli,
             .data = .{
                 .i_type = .{
-                    .rs1 = src_mcv.register,
-                    .rd = src_mcv.register,
+                    .rs1 = src_reg,
+                    .rd = src_reg,
                     .imm12 = @intCast(src_int_info.bits - dst_int_info.bits - 1),
                 },
             },
@@ -1122,8 +1131,8 @@ fn airTrunc(self: *Self, inst: Air.Inst.Index) !void {
             .tag = .srli,
             .data = .{
                 .i_type = .{
-                    .rs1 = src_mcv.register,
-                    .rd = src_mcv.register,
+                    .rs1 = src_reg,
+                    .rd = dst_mcv.register,
                     .imm12 = @intCast(src_int_info.bits - dst_int_info.bits - 1),
                 },
             },
@@ -1134,18 +1143,17 @@ fn airTrunc(self: *Self, inst: Air.Inst.Index) !void {
                 .tag = .@"or",
                 .data = .{
                     .r_type = .{
-                        .rs1 = src_mcv.register,
-                        .rs2 = tmp_mcv,
-                        .rd = src_mcv.register,
+                        .rs1 = dst_mcv.register,
+                        .rs2 = tmp_reg.?,
+                        .rd = dst_mcv.register,
                     },
                 },
             });
         }
 
-        break :result src_mcv;
+        break :result dst_mcv;
     };
 
-    // return self.fail("TODO implement trunc for {}", .{self.target.cpu.arch});
     return self.finishAir(inst, result, .{ ty_op.operand, .none, .none });
 }
 
